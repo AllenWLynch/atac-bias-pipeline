@@ -3,6 +3,7 @@ from joblib import load
 import numpy as np
 import argparse
 import sys
+import warnings
 
 from utils import lines_grouper, Preprocessor
 
@@ -27,8 +28,9 @@ if __name__ == "__main__":
     grouper = lines_grouper(args.bias_file, 1000)
 
     fragments_processed = 0
+    feature_means = None
     for fragments in iter(grouper):
-
+        
         fragments_processed += len(fragments)
         print('\rFragments processed: {}'.format(str(fragments_processed)), end = '', file = sys.stderr)
         
@@ -41,17 +43,27 @@ if __name__ == "__main__":
             fragment_features[args.bias2 - 1],
         ]).astype(np.float32).T
 
-        if np.isnan(feature_matrix).any():
-            if args.fillnan:
-                feature_matrix = np.where(np.isnan(feature_matrix), np.nanmean(feature_matrix, axis = 0), feature_matrix)
-            else:
-                raise AssertionError('Encountered nan value in features. Try using --fillnan to replace nan with mean baises.')
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            if np.isnan(feature_matrix).any():
+                if args.fillnan:
+                    if feature_means is None:
+                        feature_means = np.nanmean(feature_matrix, axis = 0)
+                    else:
+                        #replace feature_means with local fragment means
+                        new_mean = np.nanmean(feature_matrix, axis = 0)
+                        #replace previous mean with local mean if all columns have atleast one representative
+                        if not np.isnan(new_mean).any():
+                            feature_means = new_mean
+                        feature_matrix = np.where(np.isnan(feature_matrix), feature_means, feature_matrix)
+                else:
+                    raise AssertionError('Encountered nan value in features. Try using --fillnan to replace nan with mean baises.')
 
-        try:
+        if not np.isnan(feature_matrix).any():
             dup_rates = pipeline.predict(feature_matrix)
-        except ValueError:
-            raise ValueError("Encountered nan value in features. Try using --fillnan to replace nan with mean baises. If this option is flagged, then your entire sample may contain nans for some feature.")
-
+        else:
+            print('\n(non-fatal) ERROR: Encountered group of fragments with nan features that could not be filled with a group mean. Assigning duplication rate of "nan"', file = sys.stderr)
+            dup_rates = np.full(feature_matrix.shape[0], np.nan)
 
         for fragment, dup_rate in zip(fragments, dup_rates):
             print(fragment.strip(), str(dup_rate), sep = '\t')        

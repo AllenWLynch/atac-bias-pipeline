@@ -6,6 +6,10 @@ intro_string = '''
   /  /__\  \     |  |     /  /__\  \   |  |       |¯¯¯¯¯|  |      \       |  |        /  /__\  \      ¯¯¯¯¯¯¯\ 
  /   ____   \    |  |    /   ____   \  |  \_____   ¯¯¯¯¯¯  |   O   |   ___|  |___    /   ____   \    _____|  | 
 /__/      \__\   |__|   /__/      \__\  \_______/          |______/   |__________|  /__/      \__\  |________/ 
+
+Pipeline to debias and aggregate ATAC-seq data.
+Author: Allen Lynch
+Date: 10/10/2020
 '''
 
 print(intro_string)
@@ -34,7 +38,7 @@ rule sort_fragments:
     input:
         "{dataset}/{sample}.bed"
     output:
-        "{dataset}/{sample}.sorted.bed"
+        temp("{dataset}/{sample}.sorted.bed")
     threads: 8
     resources: cpus=8, mem_mb=16000, time_min=300
     shell:
@@ -49,7 +53,7 @@ rule call_peaks:
     conda: "envs/macs2.yaml"
     shell:
         "macs2 callpeak -t \"{input}\" -f BEDPE -g {config[genomesize]} --keep-dup all -B -q 0.05 --nomodel --extsize=50 --SPMR -n {wildcards.sample} --outdir \"{wildcards.dataset}/{wildcards.sample}_peak_calling/\" && "
-        "mv {wildcards.dataset}/{wildcards.sample}_peak_calling/{wildcards.sample}_peaks.narrowPeak {output}"
+        "cat {wildcards.dataset}/{wildcards.sample}_peak_calling/{wildcards.sample}_peaks.narrowPeak | cut -f1-3 > {output}"
 
 rule sort_peaks:
     input:
@@ -108,8 +112,8 @@ rule get_cutsite_bias:
         "{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_{strand}_strand_nucs.txt"
     output:
         temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
-    threads: 5
-    resources: cpus=5, time_min=300
+    threads: 3
+    resources: cpus=3, time_min=300
     conda: "envs/sklearn.yaml"
     shell:
         "python workflow/scripts/predict_cutsite_bias.py -s {input} -c {resources.cpus} -m {config[cutsite_model]} -e 390 > {output}"
@@ -122,7 +126,8 @@ rule get_fragment_gc:
     threads: 1
     conda: "envs/pyfaidx.yaml"
     shell:
-        "workflow/scripts/get_fragment_features.sh {config[reference]} {input} > {output}"
+        "faidx {config[reference]} --bed {input} --transform nucleotide --lazy -s N | cut -f 4-9 | "
+        "awk '{{OFS=\"\t\"}} NR>1 {{print ($1+$2+$3+$4 > 0) ? ($3+$4)/($1+$2+$3+$4) : \"nan\", $1+$2+$3+$4+$5}}' > {output}"
 
 rule get_fragment_duprate:
     input:
@@ -168,7 +173,7 @@ rule calculate_lambda_bar:
     output:
         "{dataset}/{sample}_processing/average_bias.txt"
     shell:
-        "awk 'BEGIN {{sum=0}} {{sum=sum+$10}} END {{print sum/NR}}' {input} > {output}"
+        "awk 'BEGIN {{sum=0; num=0}} $10!=\"nan\" {{sum=sum+$10; num=num+1}} END {{print sum/num}}' {input} > {output}"
 
 rule correct_bias:
     input:
@@ -177,7 +182,7 @@ rule correct_bias:
     output:
         "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
     shell:
-        "awk -v lambda=$(cat {input.lambda_bar}) '{{OFS=\"\t\"}} {{print $0,exp(lambda)/exp($10)}}' {input.bedfile} > {output}"
+        "awk -v lambda=$(cat {input.lambda_bar}) '{{OFS=\"\t\"}} {{print $0,($10!=\"nan\") ? exp(lambda)/exp($10) : \"1\"}}' {input.bedfile} > {output}"
         
 rule make_corrected_count_matrix:
     input:

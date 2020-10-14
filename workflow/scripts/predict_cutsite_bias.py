@@ -1,5 +1,5 @@
 
-from joblib import load
+import joblib
 import numpy as np
 import argparse
 import sys
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     print('Predicting bias ...', file = sys.stderr)
     encoder = OligoEncoder(args.wmer_len, WMerSimplexEncoder)
 
-    model = load(args.model)
+    model = joblib.load(args.model)
 
     sequences_processed = 0
 
