@@ -1,0 +1,202 @@
+#!/bin/python
+
+intro_string = '''
+    /¯¯¯¯\  |¯¯¯¯¯¯¯¯¯¯¯¯|  /¯¯¯¯\      /¯¯¯¯¯¯¯\          |¯¯¯¯¯¯\   |¯¯¯¯¯¯¯¯¯¯|      /¯¯¯¯\      /¯¯¯¯¯¯¯¯\ 
+   /  /\  \  ¯¯¯¯|  |¯¯¯¯  /  /\  \    |  /¯¯¯¯¯¯          |   o  |    ¯¯¯|  |¯¯¯¯     /  /\  \     \  ¯¯¯¯¯¯  
+  /  /__\  \     |  |     /  /__\  \   |  |       |¯¯¯¯¯|  |      \       |  |        /  /__\  \      ¯¯¯¯¯¯¯\ 
+ /   ____   \    |  |    /   ____   \  |  \_____   ¯¯¯¯¯¯  |   O   |   ___|  |___    /   ____   \    _____|  | 
+/__/      \__\   |__|   /__/      \__\  \_______/          |______/   |__________|  /__/      \__\  |________/ 
+'''
+
+print(intro_string)
+import os
+import sys
+from snakemake.utils import validate
+
+configfile: "./config/config.json"
+
+print("Executing with parameters:\n" + '\n'.join([str(k) + ': ' + str(v) for k, v in config.items()]))
+file_params = ['cutsite_model','fragment_model','reference']
+for file_param in file_params:
+    if not os.path.isfile(config[file_param]):
+        print('\nERROR: path "{path}" provided for param "{param}" is invalid.'\
+            .format(path = str(config[file_param]), param = file_param), file = sys.stderr)
+        exit(1)        
+
+wildcard_constraints:
+    chrom="chr[A-Za-z0-9]+"
+
+rule all:
+    input: 
+        "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+
+rule sort_fragments:
+    input:
+        "{dataset}/{sample}.bed"
+    output:
+        "{dataset}/{sample}.sorted.bed"
+    threads: 8
+    resources: cpus=8, mem_mb=16000, time_min=300
+    shell:
+        "sort -k1,1 -k2,2n {input} > {output}"
+
+rule call_peaks:
+    input:
+        "{dataset}/{sample}.sorted.bed"
+    output:
+        temp("{dataset}/{sample}_peaks.bed")
+    resources: cpus=1, mem_mb=8000, time_min=180
+    conda: "envs/macs2.yaml"
+    shell:
+        "macs2 callpeak -t \"{input}\" -f BEDPE -g {config[genomesize]} --keep-dup all -B -q 0.05 --nomodel --extsize=50 --SPMR -n {wildcards.sample} --outdir \"{wildcards.dataset}/{wildcards.sample}_peak_calling/\" && "
+        "mv {wildcards.dataset}/{wildcards.sample}_peak_calling/{wildcards.sample}_peaks.narrowPeak {output}"
+
+rule sort_peaks:
+    input:
+        "{dataset}/{sample}_peaks.bed"
+    output:
+        "{dataset}/sorted_{sample}_peaks.sorted.bed"
+    threads: 4
+    resources: cpus=4
+    shell:
+        "sort -k1,1 -k2,2n {input} > {output}"
+
+checkpoint split_bedfile:
+    input: 
+        bedfile="{dataset}/{sample}.sorted.bed",
+        peakfile="{dataset}/sorted_{sample}_peaks.sorted.bed"
+    output:
+        temp(directory("{dataset}/{sample}_processing/chromosome_fragments/"))
+    threads: 1
+    conda: "envs/bedtools.yaml"
+    shell:
+        "bedtools intersect -a {input.bedfile} -b {input.peakfile} -u -sorted | python workflow/scripts/split_bed.py -d {output} --pattern {{chrom}}_{wildcards.sample}.sorted.bed"
+
+rule mark_duplicate_fragments:
+    input:
+        "{dataset}/{sample}_processing/chromosome_fragments/{chrom}_{sample}.sorted.bed"
+    output:
+        temp("{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed")
+    threads: 1
+    shell:
+        "python workflow/scripts/fast_bulk_deduplicate.py {input} --mark > {output}"
+
+rule get_plus_strand_nucleotide_sequences:
+    input:
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+    output:
+        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_plus_strand_nucs.txt")
+    threads: 1
+    conda: "envs/pyfaidx.yaml"
+    shell:
+        "workflow/scripts/get_cut_centers.sh {input} + | workflow/scripts/expand_cut_centers.sh - 4 9 |"
+        "faidx {config[reference]} --bed - --no-name --lazy -s N > {output}"
+
+rule get_minus_strand_nucleotide_sequences:
+    input:
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+    output:
+        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_minus_strand_nucs.txt")
+    threads: 1
+    conda: "envs/pyfaidx.yaml"
+    shell:
+        "workflow/scripts/get_cut_centers.sh {input} - | workflow/scripts/expand_cut_centers.sh - 4 9 |"
+        "faidx {config[reference]} --bed - --no-name --reverse --complement --lazy -s N > {output}"
+
+rule get_cutsite_bias:
+    input:
+        "{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_{strand}_strand_nucs.txt"
+    output:
+        temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
+    threads: 5
+    resources: cpus=5, time_min=300
+    conda: "envs/sklearn.yaml"
+    shell:
+        "python workflow/scripts/predict_cutsite_bias.py -s {input} -c {resources.cpus} -m {config[cutsite_model]} -e 390 > {output}"
+
+rule get_fragment_gc:
+    input:
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+    output:
+        temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}.gc_content.tsv")
+    threads: 1
+    conda: "envs/pyfaidx.yaml"
+    shell:
+        "workflow/scripts/get_fragment_features.sh {config[reference]} {input} > {output}"
+
+rule get_fragment_duprate:
+    input:
+        bedfile="{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed",
+        gc_content="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}.gc_content.tsv",
+        plus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_plus_strand_biases.txt",
+        minus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_minus_strand_biases.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed"
+    output:
+        temp("{dataset}/{sample}_processing/chromosome_duprates/{chrom}_{sample}.sorted.mkdups.bias.bed")
+    conda: "envs/fragment_bias_env.yaml"
+    shell:
+        "paste {input.bedfile} {input.plus_strand} {input.minus_strand} {input.gc_content} | "
+        "python workflow/scripts/predict_fragment_level_bias.py -b - -m {config[fragment_model]} --fillnan |"
+        "bedtools intersect -a - -b {input.peaks} -wa -wb -sorted > {output}"
+
+def aggregate_chromosomes(wildcards):
+    checkpoint_output = checkpoints.split_bedfile.get(**wildcards).output[0]
+    return expand("{dataset}/{sample}_processing/chromosome_duprates/{chrom}_{sample}.sorted.mkdups.bias.bed",
+           sample=wildcards.sample,
+           dataset=wildcards.dataset,
+           chrom=glob_wildcards(os.path.join(checkpoint_output, "{chrom}_{sample}.sorted.bed")).chrom)
+
+rule concatenate_chromosomes:
+    input: 
+        aggregate_chromosomes
+    output: 
+        temp("{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed")
+    shell:
+        "echo {input} | sort -V | xargs cat > {output}"
+
+rule get_valid_barcodes:
+    input:
+        "{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed"
+    output:
+        "{dataset}/{sample}_barcodes.txt"
+    shell:
+        "cat {input} | cut -f4 | sort | uniq -c | sort -k1,1n | tail -n {config[num_cells]} | awk '{{print $2}}' > {output}"
+
+rule calculate_lambda_bar:
+    input:
+        "{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed"
+    output:
+        "{dataset}/{sample}_processing/average_bias.txt"
+    shell:
+        "awk 'BEGIN {{sum=0}} {{sum=sum+$10}} END {{print sum/NR}}' {input} > {output}"
+
+rule correct_bias:
+    input:
+        bedfile="{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed",
+        lambda_bar="{dataset}/{sample}_processing/average_bias.txt"
+    output:
+        "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+    shell:
+        "awk -v lambda=$(cat {input.lambda_bar}) '{{OFS=\"\t\"}} {{print $0,exp(lambda)/exp($10)}}' {input.bedfile} > {output}"
+        
+rule make_corrected_count_matrix:
+    input:
+        barcodes="{dataset}/{sample}_barcodes.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+    output:
+        "{dataset}/{sample}_corrected_counts.npz"
+    conda: "envs/sparse.yaml"
+    shell:
+        "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output} --corrected"
+
+rule make_count_matrix:
+    input:
+        barcodes="{dataset}/{sample}_barcodes.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+    output:
+        "{dataset}/{sample}_counts.npz"
+    conda: "envs/sparse.yaml"
+    shell:
+        "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {wildcards.dataset}/{wildcards.sample}_count_matrix"
