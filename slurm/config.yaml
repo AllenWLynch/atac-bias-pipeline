@@ -1,6 +1,6 @@
 jobs: 24
 cluster: sbatch
 use-conda: true
-cluster: "sbatch -p high -t {resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} -o logs_slurm/{rule}_{wildcards} -e logs_slurm/{rule}_{wildcards} --mail-type=FAIL --mail-user=alynch@ds.dfci.harvard.edu"
+cluster: "sbatch -t {resources.time_min} --mem={resources.mem_mb} -c {resources.cpus} -o /liulab/alynch/logs/{rule}_{wildcards} -e /liulab/alynch/logs/{rule}_{wildcards} --mail-type=FAIL --mail-user=alynch@ds.dfci.harvard.edu"
 default-resources: [cpus=1, mem_mb=2000, time_min=60]
 resources: [cpus=24, mem_mb=24000]

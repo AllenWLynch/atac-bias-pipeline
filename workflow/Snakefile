@@ -1,6 +1,6 @@
 #!/bin/python
 
-intro_string = '''
+intro_string = r'''
         _______       _____      _____              _     _           
      /\|__   __|/\   / ____|    |  __ \            | |   (_)          
     /  \  | |  /  \ | |   ______| |  | | ___ ______| |__  _  __ _ ___ 
@@ -41,7 +41,7 @@ rule sort_fragments:
     output:
         temp("{dataset}/{sample}.sorted.bed")
     threads: 8
-    resources: cpus=8, mem_mb=16000, time_min=300
+    resources: cpus=8, mem_mb=8000, time_min=300
     shell:
         "sort -k1,1 -k2,2n {input} > {output}"
 
