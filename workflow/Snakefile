@@ -133,8 +133,8 @@ rule get_cutsite_bias:
         "{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_{strand}_strand_nucs.txt"
     output:
         temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
-    threads: 3
-    resources: cpus=3, time_min=300
+    threads: 5
+    resources: cpus=5, time_min=300
     conda: "envs/sklearn.yaml"
     shell:
         "python workflow/scripts/predict_cutsite_bias.py -s {input} -c {resources.cpus} -m {config[cutsite_model]} -e 390 > {output}"
