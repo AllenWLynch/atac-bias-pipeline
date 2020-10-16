@@ -85,7 +85,7 @@ def get_fragment_distribution_by_peak_and_cluster(fragments, clusters, peak_rank
 
     return stratified_subset
 
-def read_sparse_countmatrix(barcode_file, peaks_file, count_matrix_file):
+def read_sparse_countmatrix(barcode_file, peaks_file, count_matrix_file, min_peak_proportion = 0):
 
     with open(barcode_file, 'r') as f:
         barcodes = [b.strip() for b in f]
@@ -98,7 +98,11 @@ def read_sparse_countmatrix(barcode_file, peaks_file, count_matrix_file):
 
     counts = sparse.load_npz(count_matrix_file)
 
-    return AnnData(X = counts, obs = barcodes, var = peaks)
+    data = AnnData(X = counts, obs = barcodes, var = peaks)
+    data.obs['unique_peaks'] = (data.X > 0).sum(axis = 1)
+    data = data[data.obs.unique_peaks >= min_peak_proportion * len(peaks)]
+
+    return data
 
 def get_differential_peaks(andata, top_n = 200):
 
@@ -139,7 +143,7 @@ def process_counts(andata):
     
     sc.pp.neighbors(andata, use_rep = 'X_lsi')
 
-    sc.tl.leiden(andata, resolution = 0.6)
+    sc.tl.leiden(andata, resolution = 0.5)
 
     sc.tl.umap(andata)
     

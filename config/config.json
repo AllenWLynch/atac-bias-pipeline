@@ -3,5 +3,6 @@
     "fragment_model" : "./models/fragment_model_v1.model",
     "num_cells" : "10000",
     "reference" : "./references/hg38.fa",
-    "genomesize" : "hs"
+    "genomesize" : "hs",
+    "min_peak_proportion" : 0.05
 }

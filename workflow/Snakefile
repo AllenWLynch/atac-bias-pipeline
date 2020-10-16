@@ -33,14 +33,8 @@ wildcard_constraints:
     chrom="chr[A-Za-z0-9]+"
 
 rule all:
-    input: 
-        barcodes="{dataset}/{sample}_barcodes.txt",
-        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
-        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed",
-        corrected_counts="{dataset}/{sample}_corrected_counts.npz",
-        counts="{dataset}/{sample}_counts.npz"
-    output:
-        touch("{dataset}/{sample}.done")
+    input:
+        "{dataset}/{sample}.done"
 
 rule compress_for_transfer:
     input:
@@ -134,7 +128,7 @@ rule get_cutsite_bias:
     output:
         temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
     threads: 5
-    resources: cpus=5, time_min=300
+    resources: cpus=5, time_min=300, mem_mb: 3000
     conda: "envs/sklearn.yaml"
     shell:
         "python workflow/scripts/predict_cutsite_bias.py -s {input} -c {resources.cpus} -m {config[cutsite_model]} -e 390 > {output}"
@@ -213,6 +207,7 @@ rule make_corrected_count_matrix:
     output:
         "{dataset}/{sample}_corrected_counts.npz"
     conda: "envs/sparse.yaml"
+    resources: mem_mb=3000
     shell:
         "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output} --corrected"
 
@@ -224,6 +219,7 @@ rule make_count_matrix:
     output:
         "{dataset}/{sample}_counts.npz"
     conda: "envs/sparse.yaml"
+    resources: mem_mb=3000
     shell:
         "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output}"
 
@@ -236,7 +232,12 @@ rule generate_report:
         counts="{dataset}/{sample}_counts.npz"
     output:
         diffpeaks=directory("{dataset}/{sample}_diffpeaks/"),
-        report_finished=touch("{dataset}/{sample}.report_done")
+        report_finished=touch("{dataset}/{sample}.done")
+    params:
+        min_peak_proportion=config['min_peak_proportion']
+    resources:
+        cpus=1, mem_mb=8000, time_min=300
+    message: "Generating report: {wildcards.dataset}/{wildcards.sample}_report.ipynb"
     log:
         notebook="{dataset}/{sample}_report.ipynb"
     conda:
