@@ -8,7 +8,7 @@ intro_string = r'''
   / ____ \| |/ ____ \ |____     | |__| |  __/      | |_) | | (_| \__ \
  /_/    \_\_/_/    \_\_____|    |_____/ \___|      |_.__/|_|\__,_|___/
                                                                       
-Pipeline to debias and aggregate ATAC-seq data.
+Pipeline to debias, aggregate, and analyze ATAC-seq data.
 Author: Allen Lynch
 Date: 10/10/2020
 '''
@@ -20,20 +20,40 @@ from snakemake.utils import validate
 
 configfile: "./config/config.json"
 
-print("Executing with parameters:\n" + '\n'.join([str(k) + ': ' + str(v) for k, v in config.items()]))
-file_params = ['cutsite_model','fragment_model','reference']
-for file_param in file_params:
-    if not os.path.isfile(config[file_param]):
-        print('\nERROR: path "{path}" provided for param "{param}" is invalid.'\
-            .format(path = str(config[file_param]), param = file_param), file = sys.stderr)
-        exit(1)        
+if not 'skiptest' in config or not config['skiptest'] == True:
+    print("Executing with parameters:\n" + '\n'.join([str(k) + ': ' + str(v) for k, v in config.items()]))
+    file_params = ['cutsite_model','fragment_model','reference']
+    for file_param in file_params:
+        if not os.path.isfile(config[file_param]):
+            print('\nERROR: path "{path}" provided for param "{param}" is invalid.'\
+                .format(path = str(config[file_param]), param = file_param), file = sys.stderr)
+            exit(1)
 
 wildcard_constraints:
     chrom="chr[A-Za-z0-9]+"
 
 rule all:
     input: 
-        "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+        barcodes="{dataset}/{sample}_barcodes.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed",
+        corrected_counts="{dataset}/{sample}_corrected_counts.npz",
+        counts="{dataset}/{sample}_counts.npz"
+    output:
+        touch("{dataset}/{sample}.done")
+
+rule compress_for_transfer:
+    input:
+        barcodes="{dataset}/{sample}_barcodes.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed",
+        corrected_counts="{dataset}/{sample}_corrected_counts.npz",
+        counts="{dataset}/{sample}_counts.npz"
+    output:
+        "{dataset}/{sample}_data.tar.gz"
+    message: "Compressed files needed to run notebook: {output}"
+    shell:
+        "tar -czvf {output} {input}"
 
 rule sort_fragments:
     input:
@@ -58,7 +78,7 @@ rule call_peaks:
 
 rule sort_peaks:
     input:
-        "{dataset}/{sample}_peaks.bed"
+        ancient("{dataset}/{sample}_peaks.bed")
     output:
         "{dataset}/sorted_{sample}_peaks.sorted.bed"
     threads: 4
@@ -205,4 +225,21 @@ rule make_count_matrix:
         "{dataset}/{sample}_counts.npz"
     conda: "envs/sparse.yaml"
     shell:
-        "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {wildcards.dataset}/{wildcards.sample}_count_matrix"
+        "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output}"
+
+rule generate_report:
+    input:
+        barcodes="{dataset}/{sample}_barcodes.txt",
+        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed",
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed",
+        corrected_counts="{dataset}/{sample}_corrected_counts.npz",
+        counts="{dataset}/{sample}_counts.npz"
+    output:
+        diffpeaks=directory("{dataset}/{sample}_diffpeaks/"),
+        report_finished=touch("{dataset}/{sample}.report_done")
+    log:
+        notebook="{dataset}/{sample}_report.ipynb"
+    conda:
+        "envs/report.yaml"
+    notebook:
+        "report_template.py.ipynb"
