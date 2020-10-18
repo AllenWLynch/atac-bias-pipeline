@@ -55,7 +55,7 @@ rule sort_fragments:
     output:
         temp("{dataset}/{sample}.sorted.bed")
     threads: 8
-    resources: cpus=8, mem_mb=8000, time_min=300
+    resources: cpus=8, mem_mb=config["notebook_mem"], time_min=300
     shell:
         "sort -k1,1 -k2,2n {input} > {output}"
 
@@ -236,7 +236,7 @@ rule generate_report:
     params:
         min_peak_proportion=config['min_peak_proportion']
     resources:
-        cpus=1, mem_mb=8000, time_min=300
+        cpus=1, mem_mb=config["notebook_mem"], time_min=300
     message: "Generating report: {wildcards.dataset}/{wildcards.sample}_report.ipynb"
     log:
         notebook="{dataset}/{sample}_report.ipynb"
