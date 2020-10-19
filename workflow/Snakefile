@@ -128,7 +128,7 @@ rule get_cutsite_bias:
     output:
         temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
     threads: 5
-    resources: cpus=5, time_min=300, mem_mb=3000
+    resources: cpus=5, time_min=300, mem_mb=4000
     conda: "envs/sklearn.yaml"
     shell:
         "python workflow/scripts/predict_cutsite_bias.py -s {input} -c {resources.cpus} -m {config[cutsite_model]} -e 390 > {output}"
@@ -207,7 +207,7 @@ rule make_corrected_count_matrix:
     output:
         "{dataset}/{sample}_corrected_counts.npz"
     conda: "envs/sparse.yaml"
-    resources: mem_mb=3000
+    resources: mem_mb=8000
     shell:
         "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output} --corrected"
 
@@ -219,7 +219,7 @@ rule make_count_matrix:
     output:
         "{dataset}/{sample}_counts.npz"
     conda: "envs/sparse.yaml"
-    resources: mem_mb=3000
+    resources: mem_mb=8000
     shell:
         "python workflow/scripts/make_sparse_counts.py -b {input.barcodes} -p {input.peaks} -f {input.fragments} -o {output}"
 
