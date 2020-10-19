@@ -53,7 +53,7 @@ rule sort_fragments:
     input:
         "{dataset}/{sample}.bed"
     output:
-        temp("{dataset}/{sample}.sorted.bed")
+        "{dataset}/{sample}.sorted.bed"
     threads: 8
     resources: cpus=8, mem_mb=config["notebook_mem"], time_min=300
     shell:
@@ -74,7 +74,7 @@ rule sort_peaks:
     input:
         ancient("{dataset}/{sample}_peaks.bed")
     output:
-        "{dataset}/sorted_{sample}_peaks.sorted.bed"
+        "{dataset}/sorted_{sample}_peaks.bed"
     threads: 4
     resources: cpus=4
     shell:
