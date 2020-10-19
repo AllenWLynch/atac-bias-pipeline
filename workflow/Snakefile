@@ -236,7 +236,7 @@ rule generate_report:
     params:
         min_peak_proportion=config['min_peak_proportion']
     resources:
-        cpus=1, mem_mb=config["notebook_mem"], time_min=300
+        cpus=4, mem_mb=config["notebook_mem"], time_min=300
     message: "Generating report: {wildcards.dataset}/{wildcards.sample}_report.ipynb"
     log:
         notebook="{dataset}/{sample}_report.ipynb"
