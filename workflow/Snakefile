@@ -30,7 +30,7 @@ if not 'skiptest' in config or not config['skiptest'] == True:
             exit(1)
 
 wildcard_constraints:
-    chrom="chr[A-Za-z0-9]+"
+    chrom="chr[a-zA-Z0-9_]+"
 
 rule all:
     input:
@@ -63,7 +63,7 @@ rule call_peaks:
     input:
         "{dataset}/{sample}.sorted.bed"
     output:
-        temp("{dataset}/{sample}_peaks.bed")
+        "{dataset}/{sample}_peaks.bed"
     resources: cpus=1, mem_mb=8000, time_min=180
     conda: "envs/macs2.yaml"
     shell:
@@ -89,22 +89,22 @@ checkpoint split_bedfile:
     threads: 1
     conda: "envs/bedtools.yaml"
     shell:
-        "bedtools intersect -a {input.bedfile} -b {input.peakfile} -u -sorted | python workflow/scripts/split_bed.py -d {output} --pattern {{chrom}}_{wildcards.sample}.sorted.bed"
+        "bedtools intersect -a {input.bedfile} -b {input.peakfile} -u -sorted | python workflow/scripts/split_bed.py -d {output} --pattern {{chrom}}-{wildcards.sample}.sorted.bed"
 
 rule mark_duplicate_fragments:
     input:
-        "{dataset}/{sample}_processing/chromosome_fragments/{chrom}_{sample}.sorted.bed"
+        "{dataset}/{sample}_processing/chromosome_fragments/{chrom}-{sample}.sorted.bed"
     output:
-        temp("{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed")
+        temp("{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}-{sample}.sorted.mkdups.bed")
     threads: 1
     shell:
         "python workflow/scripts/fast_bulk_deduplicate.py {input} --mark > {output}"
 
 rule get_plus_strand_nucleotide_sequences:
     input:
-        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}-{sample}.sorted.mkdups.bed"
     output:
-        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_plus_strand_nucs.txt")
+        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}-{sample}_plus_strand_nucs.txt")
     threads: 1
     conda: "envs/pyfaidx.yaml"
     shell:
@@ -113,9 +113,9 @@ rule get_plus_strand_nucleotide_sequences:
 
 rule get_minus_strand_nucleotide_sequences:
     input:
-        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}-{sample}.sorted.mkdups.bed"
     output:
-        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_minus_strand_nucs.txt")
+        temp("{dataset}/{sample}_processing/nucleotide_sequences/{chrom}-{sample}_minus_strand_nucs.txt")
     threads: 1
     conda: "envs/pyfaidx.yaml"
     shell:
@@ -124,9 +124,9 @@ rule get_minus_strand_nucleotide_sequences:
 
 rule get_cutsite_bias:
     input:
-        "{dataset}/{sample}_processing/nucleotide_sequences/{chrom}_{sample}_{strand}_strand_nucs.txt"
+        "{dataset}/{sample}_processing/nucleotide_sequences/{chrom}-{sample}_{strand}_strand_nucs.txt"
     output:
-        temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_{strand}_strand_biases.txt")
+        temp("{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}_{strand}_strand_biases.txt")
     threads: 5
     resources: cpus=5, time_min=300, mem_mb=4000
     conda: "envs/sklearn.yaml"
@@ -135,9 +135,9 @@ rule get_cutsite_bias:
 
 rule get_fragment_gc:
     input:
-        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed"
+        "{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}-{sample}.sorted.mkdups.bed"
     output:
-        temp("{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}.gc_content.tsv")
+        temp("{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}.gc_content.tsv")
     threads: 1
     conda: "envs/pyfaidx.yaml"
     shell:
@@ -146,13 +146,13 @@ rule get_fragment_gc:
 
 rule get_fragment_duprate:
     input:
-        bedfile="{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}_{sample}.sorted.mkdups.bed",
-        gc_content="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}.gc_content.tsv",
-        plus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_plus_strand_biases.txt",
-        minus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}_{sample}_minus_strand_biases.txt",
+        bedfile="{dataset}/{sample}_processing/dupmarked_chromosome_fragments/{chrom}-{sample}.sorted.mkdups.bed",
+        gc_content="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}.gc_content.tsv",
+        plus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}_plus_strand_biases.txt",
+        minus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}_minus_strand_biases.txt",
         peaks="{dataset}/sorted_{sample}_peaks.sorted.bed"
     output:
-        temp("{dataset}/{sample}_processing/chromosome_duprates/{chrom}_{sample}.sorted.mkdups.bias.bed")
+        temp("{dataset}/{sample}_processing/chromosome_duprates/{chrom}-{sample}.sorted.mkdups.bias.bed")
     conda: "envs/fragment_bias_env.yaml"
     shell:
         "paste {input.bedfile} {input.plus_strand} {input.minus_strand} {input.gc_content} | "
@@ -161,10 +161,10 @@ rule get_fragment_duprate:
 
 def aggregate_chromosomes(wildcards):
     checkpoint_output = checkpoints.split_bedfile.get(**wildcards).output[0]
-    return expand("{dataset}/{sample}_processing/chromosome_duprates/{chrom}_{sample}.sorted.mkdups.bias.bed",
+    return expand("{dataset}/{sample}_processing/chromosome_duprates/{chrom}-{sample}.sorted.mkdups.bias.bed",
            sample=wildcards.sample,
            dataset=wildcards.dataset,
-           chrom=glob_wildcards(os.path.join(checkpoint_output, "{chrom}_{sample}.sorted.bed")).chrom)
+           chrom=sorted(glob_wildcards(os.path.join(checkpoint_output, "{chrom}-{sample}.sorted.bed")).chrom))
 
 rule concatenate_chromosomes:
     input: 
@@ -172,7 +172,7 @@ rule concatenate_chromosomes:
     output: 
         temp("{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed")
     shell:
-        "echo {input} | sort -V | xargs cat > {output}"
+        "echo {input} | xargs cat > {output}"
 
 rule get_valid_barcodes:
     input:
