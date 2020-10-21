@@ -74,6 +74,7 @@ rule filter_peaked_fragments:
     output:
         temp("{dataset}/assigned_{sample}_peaks.bed")
     threads: 1
+    conda: "envs/bedtools.yaml"
     shell:
         "bedtools intersect -a {input.bedfile} -b {input.peakfile} -wa -wb -sorted > {output}"
 
