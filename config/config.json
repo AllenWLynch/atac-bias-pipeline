@@ -5,5 +5,7 @@
     "reference" : "./references/hg38.fa",
     "genomesize" : "hs",
     "min_peak_proportion" : 0.05,
-    "notebook_mem" : 8000
+    "notebook_mem" : 8000,
+    "sort_mem" : 8000,
+    "sort_cpus" : 8
 }

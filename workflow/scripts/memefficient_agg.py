@@ -14,63 +14,63 @@ def release_group(group, columns, ops):
 
     agg_results = []
     for colnum, op in zip(columns, ops):
+
         agg_results.append(
-            ops[op](group[colnum - 1])
+            op(np.array(group[colnum - 1]).astype(np.float))
         )
 
     return agg_results    
 
-def iter_groups(*,fileinput, groupby, columns, ops, delim):
+def iter_groups(*,fileinput, groupby, columns, ops, delim, ignore_warnings = False):
 
     last_index = None
     group = []
     for i, record in enumerate(fileinput):
 
         fields = record.split(delim)
-        index = fields[groupby]
+        index = fields[groupby - 1]
 
-        if not index == last_index:
+        if not last_index is None and not index == last_index:
 
-            if not index > last_index:
+            if ignore_warnings==False and index < last_index:
                 raise NotSortedError('Record number {} in input file is out-of-order.'.format(str(i)))
             
             agg_results = release_group(group, columns, ops)
-            yield (index, agg_results)
-
-            last_index = index
+            yield (last_index, agg_results)
             group = []
 
+        last_index = index
         group.append(fields)
 
-    yield (index, release_group(group, columns, ops))
+    yield (last_index, release_group(group, columns, ops))
 
         
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('input', nargs = "?", default=sys.stdin)
+    parser.add_argument('input', nargs = "?", type = argparse.FileType('r'), default=sys.stdin)
     parser.add_argument('-g','--groupby',type = int, default=1)
-    parser.add_argument('-o','--operations',default='sum',nargs='+', choices=['sum','mean','count','sample'])
+    parser.add_argument('-o','--operations',default='sum',nargs='+', choices=['sum','mean','count','sample','median'])
     parser.add_argument('-c','--columns',type = int, default=2, nargs='+')
     parser.add_argument('--sample_num', type = int, default=150)
     parser.add_argument('-d','--delim',type = str, default='\t')
+    parser.add_argument('--ignore_warnings',action='store_true')
     args = parser.parse_args()
-
-    print(args)
-    assert(False)
 
     OPS = {
         'sum' : np.sum,
         'mean' : np.nanmean,
-        'count' : np.count,
-        'sample' : lambda x : np.random.choice(x, size = (min(len(x), args.sample_num),))
+        'count' : np.size,
+        'sample' : lambda x : list(np.random.choice(x, size = (min(len(x), args.sample_num),), replace = False)),
+        'median' : np.median,
     }
 
     try:
         for index, results in iter_groups(fileinput=args.input, groupby=args.groupby, columns=args.columns,
-                ops = [OPS[op] for op in args.ops], delim=args.delim):
+                ops = [OPS[op] for op in args.operations], delim=args.delim, ignore_warnings=args.ignore_warnings):
 
-            print(index,*results, sep = args.delim, file = sys.stderr)
+            print(index,*results, sep = args.delim, file = sys.stdout)
+
     except NotSortedError as err:
-        print(err, file = sys.stdout)
+        print(err, file = sys.stderr)
         exit(1)

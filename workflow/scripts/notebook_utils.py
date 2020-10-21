@@ -7,8 +7,13 @@ from scipy import sparse
 from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import normalize
 import seaborn as sns
+import subprocess
+from io import StringIO
 
+#__DATA READING__
 def get_peak_id(data, keys = ['chr','start','end']):
     return data[keys[0]].astype(str) + '_' + data[keys[1]].astype(str).str.strip() + '_' + data[keys[2]].astype(str).str.strip()
 
@@ -19,91 +24,80 @@ def read_bias_file(filepath):
     fragments['peak_id'] = get_peak_id(fragments, keys = ['peak_chr','peak_start','peak_end'])
     return fragments
 
-def benchmark_fragment_model(fragments):
+def read_stats(filepath, columns):
+    stats = pd.read_csv(filepath, sep = '\t', header = None)
+    stats.columns = columns
+    #stats['samples'] = stats.samples.apply(lambda x : list(map(float, x.strip('[]').split(', ')))).apply(np.array)
+    return stats
 
-    dup_group_counts = fragments['dup_group'].value_counts()
-    dup_group_counts.name = 'duplicate_counts'
-    dup_group_counts[-1] = 1
+def read_barcode_stats(filepath):
+    return read_stats(filepath, ['barcode','mean_log_duprate','fragment_count','samples'])
 
-    peak_counts = fragments.groupby('peak_id')['barcode'].nunique()
-    peak_counts.name = 'peak_accessible_in_cells'
-
-    fragments = fragments.sample(5000)
-    fragments = fragments.merge(peak_counts, on = 'peak_id', how = 'inner')\
-        .merge(dup_group_counts.reset_index(), left_on = 'dup_group', right_on = 'index')
-    fragments['true_log_duprate'] = np.log(fragments.duplicate_counts / fragments.peak_accessible_in_cells)
-
-    return fragments[['log_duprate', 'true_log_duprate']]
-
-def aggregate_cell_stats(fragments):
-
-    groupby_object = fragments.groupby('barcode')
-
-    barcode_bias = groupby_object.agg({'log_duprate' : np.nanmean, 'bias1' : 'count'})
-    barcode_bias.columns = ['mean_log_duprate', 'fragment_count']
-    barcode_list = groupby_object['log_duprate'].apply(list)
-    barcode_list.name = 'all_log_duprates'
-
-    return barcode_bias.join(barcode_list)
-
-def rank_peaks(fragments):
-
-    peak_ranks = fragments.groupby('peak_id')['log_duprate'].median().sort_values().reset_index()\
-        .reset_index().rename(columns = {'index' : 'rank'})
-
-    peak_ranks = peak_ranks.merge(fragments.peak_id.value_counts().reset_index()\
-        .rename(columns = {'peak_id' : 'fragment_count','index' : 'peak_id'}), on = 'peak_id')
-
-    return peak_ranks
-
-def get_bias_peak_enrichment(fragments, clusters, peak_ranks, num_samples = 10000):
-
-    clusters.name = 'cluster'
-
-    cluster_ranks = fragments[['barcode','peak_id']].merge(peak_ranks[['peak_id', 'rank']], on = 'peak_id')\
-        .merge(clusters.reset_index().rename(columns = {'index' : 'barcode'}), on = 'barcode', how = 'left').groupby('cluster')['rank']\
-        .apply(lambda x : np.random.choice(x.values.reshape(-1), size = min(num_samples, len(x)), replace = False)).explode()
-    cluster_ranks.columns = ['cluster','rank']
-
-    return cluster_ranks
-
-def get_fragment_distribution_by_peak_and_cluster(fragments, clusters, peak_ranks):
-
-    unbiased_rank, biased_rank = np.quantile(peak_ranks['rank'].values, [0.1,0.9])
-    peaks_of_interest = pd.concat([
-        peak_ranks[peak_ranks['rank'] >= biased_rank].sample(10),
-        peak_ranks[peak_ranks['rank'] <= unbiased_rank].sample(10)
-    ])
-
-    clusters.name = 'cluster'
-
-    fragments = peaks_of_interest.merge(fragments, on = 'peak_id', how = 'left')\
-        .merge(clusters.reset_index().rename(columns = {'index' : 'barcode'}), on = 'barcode', how = 'right')
-
-    stratified_subset = fragments.groupby(['peak_id','cluster'], group_keys=False)\
-        .apply(lambda x : x.sample(min(len(x), 150))).sort_values('rank')
-
-    return stratified_subset
+def read_peak_stats(filepath):
+    peak_stats = read_stats(filepath, ['peak_id','median_log_duprate','fragment_count','samples'])
+    peak_stats['rank'] = peak_stats.median_log_duprate.rank(method = 'first',na_option = 'keep')
+    return peak_stats
 
 def read_sparse_countmatrix(barcode_file, peaks_file, count_matrix_file, min_peak_proportion = 0):
 
-    with open(barcode_file, 'r') as f:
-        barcodes = [b.strip() for b in f]
-
-    with open(peaks_file, 'r') as f:
-        peaks = [p.strip().replace('\t','_') for p in f]
-
-    barcodes = pd.DataFrame(index = barcodes)
-    peaks = pd.DataFrame(index = peaks)
-
+    barcode_stats = read_barcode_stats(barcode_file)
+    peak_stats = read_peak_stats(peaks_file)
+    
     counts = sparse.load_npz(count_matrix_file)
 
-    data = AnnData(X = counts, obs = barcodes, var = peaks)
-    data.obs['unique_peaks'] = (data.X > 0).sum(axis = 1)
-    data = data[data.obs.unique_peaks >= min_peak_proportion * len(peaks)]
+    data = AnnData(X = counts, obs = barcode_stats, var = peak_stats)
+
+    data.var['accessible_in_cells'] =  np.array((data.X > 0).sum(axis=0)).reshape(-1)
 
     return data
 
+#__PLOT GENERATION__
+def benchmark_fragment_model(fragments, dupcounts, peak_stats):
+
+    fragments = fragments.merge(peak_stats[['peak_id','accessible_in_cells']], on = 'peak_id', how = 'inner')\
+        .merge(dupcounts, left_on = 'dup_group', right_on = 'group')
+    fragments['true_log_duprate'] = np.log(fragments.duplicate_counts / fragments.accessible_in_cells)
+
+    return fragments[['log_duprate', 'true_log_duprate']]
+
+def sample_ranks(andata_chunk, num_samples = 10000):
+
+    cluster_peak_counts = np.array(andata_chunk.X.sum(axis = 0)).reshape(-1)
+    cluster_peak_probs = cluster_peak_counts / cluster_peak_counts.sum()
+
+    peak_samples = np.random.choice(len(cluster_peak_probs), p = cluster_peak_probs, 
+        size = (min(len(cluster_peak_probs), num_samples),))
+    
+    sampled_ranks = andata_chunk.var.iloc[peak_samples]['rank'].values.astype(int)
+
+    return sampled_ranks
+
+def get_bias_peak_enrichment(andata, cluster_key, num_samples = 10000):
+
+    ranks_dict = {}
+    for cluster_id in np.unique(andata.obs[cluster_key]):
+        ranks_dict[cluster_id] = sample_ranks(
+            andata[andata.obs[cluster_key] == cluster_id, ~np.isnan(andata.var['rank'])], 
+            num_samples=num_samples
+        )
+
+    ranks_df = pd.DataFrame(ranks_dict)
+    ranks_df = pd.melt(ranks_df, var_name = 'cluster_id', value_name = 'rank')
+    return ranks_df
+
+def get_fragment_distribution_by_peak_and_cluster(andata, peaks_str, cluster_key):
+
+    selected_fragments = read_bias_file(StringIO(peaks_str))
+
+    selected_fragments = selected_fragments.merge(andata.obs[['barcode',cluster_key]], on = 'barcode', how = 'right')\
+        .merge(andata.var[['peak_id','rank']], on = 'peak_id', how = 'right')
+
+    stratified_subset = selected_fragments.groupby(['peak_id',cluster_key], group_keys=False)\
+        .apply(lambda x : x.sample(min(len(x), 150)))
+
+    return stratified_subset
+
+#__SCANPY ADDONS___
 def get_differential_peaks(andata, top_n = 200):
 
     sc.tl.rank_genes_groups(andata, 'leiden', method='wilcoxon')
@@ -148,3 +142,23 @@ def process_counts(andata):
     sc.tl.umap(andata)
     
     return lsi_model
+
+def compute_neighborhood_change(*,control, treatment, cluster_key='leiden', mask_cluster = True):
+    
+    a1_distances = cosine_similarity(control.obsm['X_lsi'])
+    a2_distances = cosine_similarity(treatment.obsm['X_lsi'])
+    
+    if mask_cluster:
+        clusters = control.obs[cluster_key].values
+        cluster_square = np.tile(clusters, (len(clusters), 1))
+
+        same_cluster_mask = cluster_square == cluster_square.T
+    else:
+        same_cluster_mask = np.full(a1_distances.shape, True)
+    
+    a1_distances = normalize(np.where(same_cluster_mask, 0.0, a1_distances), 'l2')
+    a2_distances = normalize(np.where(same_cluster_mask, 0.0, a2_distances), 'l2')
+    
+    neighborhood_change = 1 - np.sum(np.multiply(a1_distances, a2_distances), axis = 1)
+    
+    control.obs['neighbor_change'] = neighborhood_change

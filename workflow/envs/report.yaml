@@ -11,3 +11,4 @@ dependencies:
   - scanpy =1.6.0
   - leidenalg
   - jupyter =1.0.0
+  - bedtools =2.29.2
