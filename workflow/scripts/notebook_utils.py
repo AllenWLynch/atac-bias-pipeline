@@ -11,6 +11,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 import seaborn as sns
 import subprocess
+from functools import partial
 from io import StringIO
 
 #__DATA READING__
@@ -125,8 +126,29 @@ def plot_umap(andata,*,color_key, key = 'X_umap', quantitative=True, ax = None, 
     ax.set(xticklabels = [], xticks = [], yticks = [])
     sns.despine()
     return ax
+
+def _binary_search(func, acceptible_range, low, high, iter_num = 0, max_iter = 10):
+
+    midpoint = low + (high - low)/2
+
+    output = func(midpoint)
     
-def process_counts(andata):
+    if (output >= acceptible_range[0] and output < acceptible_range[1]) or iter_num >= max_iter:
+        return midpoint
+
+    if output < acceptible_range[0]:
+        return _binary_search(func, acceptible_range, midpoint, high, iter_num + 1, max_iter=max_iter)
+    else:
+        return _binary_search(func, acceptible_range, low, midpoint, iter_num+1, max_iter=max_iter)        
+        
+
+def get_num_clusters(andata, resolution):
+    sc.tl.leiden(andata, resolution = 10**resolution)
+    num_clusters = andata.obs.leiden.nunique()
+    print('Resolution: {}, # Clusters: {}'.format(str(10**resolution), str(num_clusters)))
+    return num_clusters
+    
+def process_counts(andata, resolution = 0.5, tune = False, num_clusters = (7,10)):
     
     lsi_model = TruncatedSVD(n_components=50)
     X_LSI = lsi_model.fit_transform(
@@ -137,11 +159,15 @@ def process_counts(andata):
     
     sc.pp.neighbors(andata, use_rep = 'X_lsi')
 
-    sc.tl.leiden(andata, resolution = 0.5)
+    if tune:
+        cluster_func = partial(get_num_clusters, andata)
+        resolution = _binary_search(cluster_func, num_clusters, -2, 0)
+    else:
+        sc.tl.leiden(andata, resolution = resolution)
 
     sc.tl.umap(andata)
     
-    return lsi_model
+    return lsi_model, resolution
 
 def compute_neighborhood_change(*,control, treatment, cluster_key='leiden', mask_cluster = True):
     
