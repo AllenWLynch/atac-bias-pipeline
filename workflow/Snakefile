@@ -294,7 +294,7 @@ rule generate_report:
         min_peak_proportion=config['min_peak_proportion']
     resources:
         cpus=1, mem_mb=config["notebook_mem"], time_min=300
-    message: "Generating report: {wildcards.dataset}/{wildcards.sample}_report.ipynb"
+    message: "Generating report: " + os.path.abspath("{wildcards.dataset}/{wildcards.sample}_analysis/{wildcards.sample}_report.ipynb")
     log:
         notebook="{dataset}/{sample}_analysis/{sample}_report.ipynb"
     conda:
