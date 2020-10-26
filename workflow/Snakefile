@@ -241,6 +241,8 @@ rule get_peak_stats:
 def set_cnt_matrix_flag(wildcards, *args):
     if wildcards.corrected == 'corrected':
         return '--corrected'
+    elif wildcards.corrected == 'dedup':
+        return '--dedup'
     elif wildcards.corrected == 'raw':
         return ''
     else:
@@ -283,12 +285,13 @@ rule generate_report:
         peaks="{dataset}/{sample}_analysis/{sample}_peak_stats.tsv",
         corrected_counts="{dataset}/{sample}_analysis/{sample}_corrected_counts.npz",
         counts="{dataset}/{sample}_analysis/{sample}_raw_counts.npz",
+        dedup_counts="{dataset}/{sample}_analysis/{sample}_dedup_counts.npz",
         dupcounts="{dataset}/{sample}_analysis/{sample}_dupgroup_counts.txt",
         sample_fragments="{dataset}/{sample}_analysis/{sample}_fragments.bed",
         fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
     output:
         paths="{dataset}/{sample}_analysis/paths.pkl",
-        diffpeaks=directory("{dataset}/{sample}_analysis/{sample}_diffpeaks/"),
+        diffpeaks=directory("{dataset}/{sample}_analysis/diffpeaks/"),
         report_finished=touch("{dataset}/{sample}.done")
     params:
         min_peak_proportion=config['min_peak_proportion']
