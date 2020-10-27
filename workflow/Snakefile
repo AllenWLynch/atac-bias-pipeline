@@ -67,21 +67,9 @@ rule sort_peaks:
     shell:
         "sort -k1,1 -k2,2n {input} > {output}"
 
-rule filter_peaked_fragments:
-    input:
-        bedfile="{dataset}/{sample}.sorted.bed",
-        peakfile="{dataset}/sorted_{sample}_peaks.bed"
-    output:
-        temp("{dataset}/assigned_{sample}_peaks.bed")
-    threads: 1
-    resources: cpus=1, mem_mb=8000, time_min=180
-    conda: "envs/bedtools.yaml"
-    shell:
-        "bedtools intersect -a {input.bedfile} -b {input.peakfile} -wa -wb -sorted > {output}"
-
 rule count_barcodes:
     input:
-        fragments="{dataset}/assigned_{sample}_peaks.bed",
+        fragments="{dataset}/{sample}.sorted.bed",
         peaks="{dataset}/sorted_{sample}_peaks.bed"
     output:
         temp("{dataset}/{sample}_barcodes.txt")
@@ -90,14 +78,15 @@ rule count_barcodes:
         cpus=config["sort_cpus"], mem_mb=config["sort_mem"], time_min=300
     params:
         peak_frac=int(1/config['min_peak_proportion'])
+    conda: "envs/bedtools.yaml"
     shell:
-        "cat {input.fragments} | cut -f4,6,7,8 | sort -k1,1 -k2,2 -k3,3n -k4,4n | uniq | cut -f1 | uniq -c | "
+        "bedtools intersect -a {input.fragments} -b {input.peaks} -wa -wb -sorted | cut -f4,6,7,8 | sort -k1,1 -k2,2 -k3,3n -k4,4n | uniq | cut -f1 | uniq -c | "
         "sort -k1,1n | awk -v min_peaks=$(( $(wc -l {input.peaks} | awk '{{print $1}}') / {params.peak_frac} )) '$1 >= min_peaks' "
         "| tail -n {config[num_cells]} | awk '{{print $2}}' > {output}"
 
 checkpoint split_bedfile:
     input: 
-        bedfile="{dataset}/assigned_{sample}_peaks.bed",
+        bedfile="{dataset}/{sample}.sorted.bed",
         barcodes="{dataset}/{sample}_barcodes.txt"
     output:
         temp(directory("{dataset}/{sample}_processing/chromosome_fragments/"))
@@ -174,7 +163,7 @@ rule get_fragment_duprate:
     shell:
         "paste {input.bedfile} {input.plus_strand} {input.minus_strand} {input.gc_content} | "
         "python workflow/scripts/predict_fragment_level_bias.py -b - -m {config[fragment_model]} --fillnan |"
-        "bedtools intersect -a - -b {input.peaks} -wa -wb -sorted > {output}"
+        "bedtools intersect -a - -b {input.peaks} -loj -sorted > {output}"
 
 #__REAGGREGATE SUBDAGS_____
 def aggregate_chromosomes(wildcards):
@@ -185,16 +174,24 @@ def aggregate_chromosomes(wildcards):
            chrom=sorted(glob_wildcards(os.path.join(checkpoint_output, "{chrom}-{sample}.sorted.bed")).chrom))
 
 rule concatenate_chromosomes:
-    input: 
+    input:
         aggregate_chromosomes
     output: 
-        temp("{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed")
+        "{dataset}/{sample}.sorted.mkdups.bias.bed"
     shell:
         "echo {input} | xargs cat > {output}"
 
+rule filter_peak_fragments:
+    input:
+        "{dataset}/{sample}.sorted.mkdups.bias.bed"
+    output:
+        temp("{dataset}/{sample}.sorted.mkdups.bias.filtered.bed")
+    shell:
+        "awk '$11!=\".\" {input} > {output}"
+
 rule calculate_lambda_bar:
     input:
-        "{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed"
+        "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
         "{dataset}/{sample}_processing/average_bias.txt"
     shell:
@@ -202,7 +199,7 @@ rule calculate_lambda_bar:
 
 rule correct_bias:
     input:
-        bedfile="{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed",
+        bedfile="{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
         lambda_bar="{dataset}/{sample}_processing/average_bias.txt"
     output:
         "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
@@ -213,7 +210,7 @@ rule correct_bias:
 
 rule get_barcode_stats:
     input:
-        "{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed"
+        "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
         "{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv"
     threads: 4
@@ -227,7 +224,7 @@ rule get_barcode_stats:
 
 rule get_peak_stats:
     input:
-        "{dataset}/{sample}_processing/{sample}.sorted.mkdups.bias.bed"
+        "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
         "{dataset}/{sample}_analysis/{sample}_peak_stats.tsv"
     threads: 4
@@ -279,10 +276,27 @@ rule sample_analysis_fragments:
     shell:
         "shuf -n5000 {input} > {output}"
 
+rule prep_peaks_for_annotation:
+    input:
+        "{dataset}/{sample}_analysis/{sample}_peak_stats.bed"
+    output:
+        temp("{dataset}/{sample}_analysis/temp_peaks.tsv")
+    shell:
+        "cat {input} | cut -f1-3 | tr \"_\" \"\t\" | awk '{{OFS=\"\t\"}} {{print $0,\"*\"}}' > {output}"
+
+rule annotate_peaks:
+    input:
+        "{dataset}/{sample}_analysis/temp_peaks.tsv"
+    output:
+        "{dataset}/{sample}_analysis/peak_annotations.tsv"
+    shell:
+        "Rscript worflow/scripts/annotate.r {input} > {output}
+
 rule generate_report:
     input:
         barcodes="{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv",
         peaks="{dataset}/{sample}_analysis/{sample}_peak_stats.tsv",
+        peak_annotations="{dataset}/{sample}_analysis/peak_annotations.tsv",
         corrected_counts="{dataset}/{sample}_analysis/{sample}_corrected_counts.npz",
         counts="{dataset}/{sample}_analysis/{sample}_raw_counts.npz",
         dedup_counts="{dataset}/{sample}_analysis/{sample}_dedup_counts.npz",
@@ -292,6 +306,7 @@ rule generate_report:
     output:
         paths="{dataset}/{sample}_analysis/paths.pkl",
         diffpeaks=directory("{dataset}/{sample}_analysis/diffpeaks/"),
+        delta_diffpeaks="{dataset}/{sample}_analysis/delta_diffpeaks.bed",
         report_finished=touch("{dataset}/{sample}.done")
     params:
         min_peak_proportion=config['min_peak_proportion']
@@ -299,7 +314,7 @@ rule generate_report:
         cpus=1, mem_mb=config["notebook_mem"], time_min=300
     message: "Generating report: " + os.path.abspath("{wildcards.dataset}/{wildcards.sample}_analysis/{wildcards.sample}_report.ipynb")
     log:
-        notebook="{dataset}/{sample}_analysis/{sample}_report.ipynb"
+        notebook="{dataset}/{sample}_report.ipynb"
     conda:
         "envs/report.yaml"
     notebook:
