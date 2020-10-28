@@ -156,7 +156,7 @@ rule get_fragment_duprate:
         gc_content="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}.gc_content.tsv",
         plus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}_plus_strand_biases.txt",
         minus_strand="{dataset}/{sample}_processing/fragment_features/{chrom}-{sample}_minus_strand_biases.txt",
-        peaks="{dataset}/sorted_{sample}_peaks.sorted.bed"
+        peaks="{dataset}/sorted_{sample}_peaks.bed"
     output:
         temp("{dataset}/{sample}_processing/chromosome_duprates/{chrom}-{sample}.sorted.mkdups.bias.bed")
     conda: "envs/fragment_bias_env.yaml"
@@ -187,7 +187,7 @@ rule filter_peak_fragments:
     output:
         temp("{dataset}/{sample}.sorted.mkdups.bias.filtered.bed")
     shell:
-        "awk '$11!=\".\" {input} > {output}"
+        "awk '$11!=\".\"' {input} > {output}"
 
 rule calculate_lambda_bar:
     input:
@@ -199,7 +199,7 @@ rule calculate_lambda_bar:
 
 rule correct_bias:
     input:
-        bedfile="{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
+        bedfile="{dataset}/{sample}.sorted.mkdups.bias.filtered.bed",
         lambda_bar="{dataset}/{sample}_processing/average_bias.txt"
     output:
         "{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
@@ -278,19 +278,19 @@ rule sample_analysis_fragments:
 
 rule prep_peaks_for_annotation:
     input:
-        "{dataset}/{sample}_analysis/{sample}_peak_stats.bed"
+        "{dataset}/{sample}_analysis/{sample}_peak_stats.tsv"
     output:
-        temp("{dataset}/{sample}_analysis/temp_peaks.tsv")
+        temp("{dataset}/{sample}_analysis/temp_peaks.bed")
     shell:
         "cat {input} | cut -f1-3 | tr \"_\" \"\t\" | awk '{{OFS=\"\t\"}} {{print $0,\"*\"}}' > {output}"
 
 rule annotate_peaks:
     input:
-        "{dataset}/{sample}_analysis/temp_peaks.tsv"
+        "{dataset}/{sample}_analysis/temp_peaks.bed"
     output:
         "{dataset}/{sample}_analysis/peak_annotations.tsv"
     shell:
-        "Rscript worflow/scripts/annotate.r {input} > {output}
+        "Rscript ./workflow/scripts/annotate.r {input} {output}"
 
 rule generate_report:
     input:
