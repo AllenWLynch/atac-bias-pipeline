@@ -40,7 +40,7 @@ rule sort_fragments:
     input:
         "{dataset}/{sample}.bed"
     output:
-        "{dataset}/{sample}.sorted.bed"
+        temp("{dataset}/{sample}.sorted.bed")
     threads: 8
     resources: cpus=config["sort_cpus"], mem_mb=config["sort_mem"], time_min=300
     shell:
@@ -206,7 +206,7 @@ rule correct_bias:
     shell:
         "awk -v lambda=$(cat {input.lambda_bar}) '{{OFS=\"\t\"}} {{print $0,($10!=\"nan\") ? exp(lambda)/exp($10) : \"1\"}}' {input.bedfile} > {output}"
 
-#__ANALYSIS PREPARATION______
+#__AGGREGATION AND ANALYSIS PREPARATION______
 
 rule get_barcode_stats:
     input:
@@ -292,6 +292,8 @@ rule annotate_peaks:
     shell:
         "Rscript ./workflow/scripts/annotate.r {input} {output}"
 
+#___ REPORT GENERATION _____
+
 rule generate_report:
     input:
         barcodes="{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv",
@@ -307,7 +309,7 @@ rule generate_report:
         paths="{dataset}/{sample}_analysis/paths.pkl",
         diffpeaks=directory("{dataset}/{sample}_analysis/diffpeaks/"),
         delta_diffpeaks="{dataset}/{sample}_analysis/delta_diffpeaks.bed",
-        report_finished=touch("{dataset}/{sample}.done")
+        report_finished=touch("{dataset}/{sample}.report")
     params:
         min_peak_proportion=config['min_peak_proportion']
     resources:
@@ -319,3 +321,69 @@ rule generate_report:
         "envs/report.yaml"
     notebook:
         "report_template.py.ipynb"
+
+#___VISUALIZATION_____
+
+rule prepare_peaks:
+    input:
+        "{dataset}/{sample}_analysis/peak_annotations.tsv"
+    output:
+        "{dataset}/{sample}_visualization/peak_regions.bed"
+    shell:
+        "tail -n+2 {input} | awk '{{OFS=\"\t\"}} {{print $1,$2,$3,$9,$6,\".\"}}' > {output}"
+
+def get_awk_filter(wildcards, *args):
+    if wildcards.fragment_type == 'all':
+        return 'cat '
+    elif wildcards.fragment_type == 'unique':
+        return 'awk \'$5=="-1"\' '
+    elif wildcards.fragment_type == 'duplicate':
+        return 'awk \'$5!="-1"\' '
+    raise Exception()
+
+rule fragments_to_bedgraph:
+    input:
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.bed",
+        genome=config['chrom_sizes']
+    output:
+        temp("{dataset}/{sample}_visualization/{fragment_type}_signal.bedgraph")
+    params:
+        awk_filter=get_awk_filter
+    conda: "envs/bedtools.yaml"
+    threads: 1
+    shell:
+        "{params.awk_filter}{input.fragments} | bedtools genomecov -g {input.genome} -i - -bg > {output}"
+
+rule get_peak_region_bias:
+    input:
+        "{dataset}/{sample}_analysis/peak_annotations.tsv"
+    output:
+        temp("{dataset}/{sample}_visualization/background_duprate.bedgraph")
+    params:
+        slop_peak=config['slop_peak']
+    threads: 8
+    conda: "envs/background_track.yaml"
+    resources: cpus=16
+    shell:
+        "bedtools makewindows -g {config[chrom_sizes]} -w 10000 |"
+        "python ./workflow/scripts/build_background_bias_profile.py -m {config[cutsite_model]} -f {config[fragment_model]} -w 100 -g {config[reference]} -c {threads} > {output}"
+
+rule bedgraph_to_bigwig:
+    input:
+        bedgraph="{dataset}/{sample}_visualization/{fragment_type}_{signal}.bedgraph",
+        genome=config['chrom_sizes']
+    output:
+        "{dataset}/{sample}_visualization/{fragment_type}_{signal}.bigwig"
+    threads: 1
+    conda: "envs/bigwig.yaml"
+    shell:
+        "bedGraphToBigWig {input.bedgraph} {input.genome} {output}"
+
+rule generate_vis_data:
+    input:
+        peaks="{dataset}/{sample}_visualization/peak_regions.bed",
+        dup_fragments="{dataset}/{sample}_visualization/duplicate_signal.bigwig",
+        all_fragments="{dataset}/{sample}_visualization/all_signal.bigwig",
+        background_duprate="{dataset}/{sample}_visualization/background_duprate.bigwig"
+    output:
+        touch("{dataset}/{sample}.vis")

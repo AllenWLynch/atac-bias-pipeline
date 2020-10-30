@@ -1,0 +1,8 @@
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - scikit-learn =0.23.2
+  - bedtools =2.29.2
+  - python =3.6.11
+  - pyfaidx =0.5.9.1
