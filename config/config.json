@@ -10,5 +10,5 @@
     "sort_cpus" : 8,
     "chrom_sizes" : "./references/hg38.genome",
     "background_bias_window_size" : 100,
-    "slop_peak" : 0
+    "slop_peak" : 10000
 }

@@ -356,7 +356,7 @@ rule fragments_to_bedgraph:
 
 rule get_peak_region_bias:
     input:
-        "{dataset}/{sample}_analysis/peak_annotations.tsv"
+        "{dataset}/sorted_{sample}_peaks.bed"
     output:
         temp("{dataset}/{sample}_visualization/background_duprate.bedgraph")
     params:
@@ -365,7 +365,7 @@ rule get_peak_region_bias:
     conda: "envs/background_track.yaml"
     resources: cpus=16
     shell:
-        "bedtools makewindows -g {config[chrom_sizes]} -w 10000 |"
+        "cat {input} | bedtools slop -b {params.slop_peak} -g {config[chrom_sizes]} | bedtools merge -i - | "
         "python ./workflow/scripts/build_background_bias_profile.py -m {config[cutsite_model]} -f {config[fragment_model]} -w 100 -g {config[reference]} -c {threads} > {output}"
 
 rule bedgraph_to_bigwig:
