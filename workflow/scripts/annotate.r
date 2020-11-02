@@ -1,5 +1,10 @@
 #!/usr/bin/Rscript
 
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("ChIPseeker")
+
 args = commandArgs(trailingOnly=TRUE)
 
 if (length(args) == 2){

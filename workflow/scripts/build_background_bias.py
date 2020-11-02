@@ -75,7 +75,7 @@ def summarize_window(window_cutsites, plus_sequences, minus_sequences, **kwargs)
         return (window_chr, window_start, window_end), plus_aggregate_score, minus_aggregate_score
 
 
-def process_region(region,*,window_size, fasta_file, cutsite_kwargs, fragment_model, fragment_length):
+def process_region(region,*,window_size, fasta_file, cutsite_kwargs):
 
     region_sequence_interface = RegionSequenceIterator(*region, fasta_file)
 
@@ -85,18 +85,12 @@ def process_region(region,*,window_size, fasta_file, cutsite_kwargs, fragment_mo
         if len(window_cutsites) > 20:
             window_region, plus_aggregate_score, minus_aggregate_score = summarize_window(window_cutsites, plus_sequences, minus_sequences, **cutsite_kwargs)
             
-            gc_content = region_sequence_interface.get_gc()
+            if np.isnan(plus_aggregate_score):
+                plus_aggregate_score = 0.5
+            if np.isnan(minus_aggregate_score):
+                minus_aggregate_score = 0.5
 
-            if gc_content == 0:
-                gc_content = 0.5
-
-            features = np.nan_to_num(np.array([fragment_length, gc_content, plus_aggregate_score, minus_aggregate_score]).reshape(1,-1), nan=0.5)
-            
-            try:
-                duprate = fragment_model.predict(features)[0]
-                results.append((window_region, duprate))
-            except ValueError:
-                pass
+            results.append((window_region, plus_aggregate_score, minus_aggregate_score))
 
     return results
 
@@ -107,16 +101,15 @@ def preprocess_record(record):
 
     return chrom, start, end
 
-    
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument('regions', type = argparse.FileType('r'), default=sys.stdin, nargs='?',help='Bedfile of regions to build background model')
     parser.add_argument('-m','--cutsite_model', type = str)
-    parser.add_argument('-f','--fragment_model', type = str)
-    parser.add_argument('-w','--windowsize', type = int, default=100)
+    parser.add_argument('-w','--windowsize', type = int, default=50)
     parser.add_argument('-g','--genome',type=str, help='Fasta file for indexing')
     parser.add_argument('-c','--cores',type = int, required=True)
+    parser.add_argument('-o','--output',type=str, default = '.')
     parser.set_defaults(wmer_len = 2, expected_length = 390, fragment_length = 50)
 
     args = parser.parse_args()
@@ -124,22 +117,31 @@ if __name__ == "__main__":
     fasta = pyfaidx.Fasta(args.genome, default_seq = 'N', strict_bounds = False, read_ahead=100000)
     encoder = OligoEncoder(args.wmer_len, WMerSimplexEncoder)
     model = joblib.load(args.cutsite_model)
-    fragment_model = joblib.load(args.fragment_model)
 
     process_partial = partial(process_region, window_size = args.windowsize, fasta_file = args.genome, 
-            cutsite_kwargs = dict(model = model, encoder = encoder, expected_length = args.expected_length),
-            fragment_model = fragment_model, fragment_length=args.fragment_length)
+            cutsite_kwargs = dict(model = model, encoder = encoder, expected_length = args.expected_length))
 
     windows_written = 0
-    with multiprocessing.Pool(args.cores) as p:
 
-        for region_results in p.imap(process_partial, map(preprocess_record, args.regions.readlines())):
+    outfile_plus = open(os.path.join(args.output, 'plus_background.bedgraph'),'w')
+    outfile_minus = open(os.path.join(args.output, 'minus_background.bedgraph'),'w')
 
-            for region, duprate in region_results:
+    try:
+        with multiprocessing.Pool(args.cores) as p:
 
-                print(*region, duprate, sep='\t',file=sys.stdout)
-                windows_written+=1
-                if windows_written % 50 == 0:
-                    print('\rWindows written: {}'.format(str(windows_written)), end = '', file=  sys.stderr)
+            for region_results in p.imap(process_partial, map(preprocess_record, args.regions.readlines())):
+
+                for region, plus_score, minus_score in region_results:
+
+                    print(*region, plus_score, sep='\t',file=outfile_plus)
+                    print(*region, minus_score, sep = '\t', file=outfile_minus)
+
+                    windows_written+=1
+                    if windows_written % 50 == 0:
+                        print('\rWindows written: {}'.format(str(windows_written)), end = '', file=  sys.stderr)
+    
+    finally:
+        outfile_minus.close()
+        outfile_plus.close()
     
     print('',file = sys.stderr)

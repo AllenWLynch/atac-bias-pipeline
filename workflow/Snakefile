@@ -332,33 +332,34 @@ rule prepare_peaks:
     shell:
         "tail -n+2 {input} | awk '{{OFS=\"\t\"}} {{print $1,$2,$3,$9,$6,\".\"}}' > {output}"
 
-def get_awk_filter(wildcards, *args):
-    if wildcards.fragment_type == 'all':
-        return 'cat '
-    elif wildcards.fragment_type == 'unique':
-        return 'awk \'$5=="-1"\' '
-    elif wildcards.fragment_type == 'duplicate':
-        return 'awk \'$5!="-1"\' '
-    raise Exception()
+
+def get_awk_script(wildcards, *args):
+    if wildcards.cutsite == 'plus':
+        return "{print $1,$2,$2+1}"
+    elif wildcards.cutsite == 'minus':
+        return "{print $1,$3,$3+1}"
+    else:
+        raise Exception()
 
 rule fragments_to_bedgraph:
     input:
         fragments="{dataset}/{sample}.sorted.mkdups.bias.bed",
         genome=config['chrom_sizes']
     output:
-        temp("{dataset}/{sample}_visualization/{fragment_type}_signal.bedgraph")
+        temp("{dataset}/{sample}_visualization/{cutsite}_signal.bedgraph")
     params:
-        awk_filter=get_awk_filter
+        awk_script=get_awk_script
     conda: "envs/bedtools.yaml"
     threads: 1
     shell:
-        "{params.awk_filter}{input.fragments} | bedtools genomecov -g {input.genome} -i - -bg > {output}"
+        "awk '{{OFS=\"\t\"}} {params.awk_script}' {input.fragments} | bedtools slop -g {input.genome} -b 8 | bedtools genomecov -g {input.genome} -i - -bg > {output}"
 
-rule get_peak_region_bias:
+rule get_cutsite_bias_background:
     input:
         "{dataset}/sorted_{sample}_peaks.bed"
     output:
-        temp("{dataset}/{sample}_visualization/background_duprate.bedgraph")
+        temp("{dataset}/{sample}_visualization/plus_background.bedgraph"),
+        temp("{dataset}/{sample}_visualization/minus_background.bedgraph")
     params:
         slop_peak=config['slop_peak']
     threads: 8
@@ -366,7 +367,7 @@ rule get_peak_region_bias:
     resources: cpus=16
     shell:
         "cat {input} | bedtools slop -b {params.slop_peak} -g {config[chrom_sizes]} | bedtools merge -i - | "
-        "python ./workflow/scripts/build_background_bias_profile.py -m {config[cutsite_model]} -f {config[fragment_model]} -w 100 -g {config[reference]} -c {threads} > {output}"
+        "python ./workflow/scripts/build_background_bias.py -m {config[cutsite_model]} -w 50 -g {config[reference]} -c {threads} -o {wildcards.dataset}/{wildcards.sample}_visualization/"
 
 rule bedgraph_to_bigwig:
     input:
@@ -381,9 +382,10 @@ rule bedgraph_to_bigwig:
 
 rule generate_vis_data:
     input:
-        peaks="{dataset}/{sample}_visualization/peak_regions.bed",
-        dup_fragments="{dataset}/{sample}_visualization/duplicate_signal.bigwig",
-        all_fragments="{dataset}/{sample}_visualization/all_signal.bigwig",
-        background_duprate="{dataset}/{sample}_visualization/background_duprate.bigwig"
+        "{dataset}/{sample}_visualization/peak_regions.bed",
+        "{dataset}/{sample}_visualization/plus_signal.bigwig",
+        "{dataset}/{sample}_visualization/minus_signal.bigwig",
+        "{dataset}/{sample}_visualization/plus_background.bigwig",
+        "{dataset}/{sample}_visualization/minus_background.bigwig"
     output:
         touch("{dataset}/{sample}.vis")
