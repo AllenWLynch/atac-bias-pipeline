@@ -284,11 +284,21 @@ rule prep_peaks_for_annotation:
     shell:
         "cat {input} | cut -f1-3 | tr \"_\" \"\t\" | awk '{{OFS=\"\t\"}} {{print $0,\"*\"}}' > {output}"
 
+msg_str = '''For this step to complete properly, install/load R, then run:
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("ChIPseeker")
+BiocManager::install("TxDb.Hsapiens.UCSC.hg38.knownGene")'''
+
 rule annotate_peaks:
     input:
         "{dataset}/{sample}_analysis/temp_peaks.bed"
     output:
         "{dataset}/{sample}_analysis/peak_annotations.tsv"
+    envmodules:
+        "R"
+    message: msg_str
     shell:
         "Rscript ./workflow/scripts/annotate.r {input} {output}"
 
@@ -331,7 +341,6 @@ rule prepare_peaks:
         "{dataset}/{sample}_visualization/peak_regions.bed"
     shell:
         "tail -n+2 {input} | awk '{{OFS=\"\t\"}} {{print $1,$2,$3,$9,$6,\".\"}}' > {output}"
-
 
 def get_awk_script(wildcards, *args):
     if wildcards.cutsite == 'plus':
