@@ -50,12 +50,13 @@ rule call_peaks:
     input:
         "{dataset}/{sample}.bed"
     output:
-        "{dataset}/{sample}_peaks.bed"
+        temp("{dataset}/{sample}_peaks.bed")
     resources: cpus=1, mem_mb=8000, time_min=180
     conda: "envs/macs2.yaml"
     shell:
         "macs2 callpeak -t \"{input}\" -f BEDPE -g {config[genomesize]} --keep-dup all -B -q 0.05 --nomodel --extsize=50 --SPMR -n {wildcards.sample} --outdir \"{wildcards.dataset}/{wildcards.sample}_peak_calling/\" && "
-        "cat {wildcards.dataset}/{wildcards.sample}_peak_calling/{wildcards.sample}_peaks.narrowPeak | cut -f1-3 > {output}"
+        "cat {wildcards.dataset}/{wildcards.sample}_peak_calling/{wildcards.sample}_peaks.narrowPeak | cut -f1-3 > {output} &&"
+        "rm -rf -r {wildcards.dataset}/{wildcards.sample}_peak_calling"
 
 rule sort_peaks:
     input:
@@ -193,7 +194,7 @@ rule calculate_lambda_bar:
     input:
         "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
-        "{dataset}/{sample}_processing/average_bias.txt"
+        temp("{dataset}/{sample}_processing/average_bias.txt")
     shell:
         "awk 'BEGIN {{sum=0; num=0}} $10!=\"nan\" {{sum=sum+$10; num=num+1}} END {{print sum/num}}' {input} > {output}"
 
@@ -212,7 +213,7 @@ rule get_barcode_stats:
     input:
         "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
-        "{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv"
+        temp("{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv")
     threads: 4
     resources:
         cpus=config["sort_cpus"], mem_mb=config["sort_mem"], time_min=300
@@ -226,7 +227,7 @@ rule get_peak_stats:
     input:
         "{dataset}/{sample}.sorted.mkdups.bias.filtered.bed"
     output:
-        "{dataset}/{sample}_analysis/{sample}_peak_stats.tsv"
+        temp("{dataset}/{sample}_analysis/{sample}_peak_stats.tsv")
     threads: 4
     resources:
         cpus=config["sort_cpus"], mem_mb=config["sort_mem"], time_min=300
@@ -251,7 +252,7 @@ rule make_count_matrix:
         peaks="{dataset}/{sample}_analysis/{sample}_peak_stats.tsv",
         fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
     output:
-        "{dataset}/{sample}_analysis/{sample}_{corrected}_counts.npz"
+        temp("{dataset}/{sample}_analysis/{sample}_{corrected}_counts.npz")
     conda: "envs/sparse.yaml"
     params: 
         corrected=set_cnt_matrix_flag
@@ -276,14 +277,6 @@ rule sample_analysis_fragments:
     shell:
         "shuf -n5000 {input} > {output}"
 
-rule prep_peaks_for_annotation:
-    input:
-        "{dataset}/{sample}_analysis/{sample}_peak_stats.tsv"
-    output:
-        temp("{dataset}/{sample}_analysis/temp_peaks.bed")
-    shell:
-        "cat {input} | cut -f1-3 | tr \"_\" \"\t\" | awk '{{OFS=\"\t\"}} {{print $0,\"*\"}}' > {output}"
-
 msg_str = '''For this step to complete properly, install/load R, then run:
 if (!requireNamespace("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
@@ -291,9 +284,20 @@ if (!requireNamespace("BiocManager", quietly = TRUE))
 BiocManager::install("ChIPseeker")
 BiocManager::install("TxDb.Hsapiens.UCSC.hg38.knownGene")'''
 
+rule join_tad_data:
+    input:
+        "{dataset}/sorted_{sample}_peaks.bed"
+    output:
+        temp("{dataset}/temp_{sample}_peaks.bed")
+    params:
+        tads="./resources/TADs.bed"
+    conda: "envs/bedtools.yaml"
+    shell:
+        "bedtools intersect -a {input} -b {params.tads} -loj -f 0.5 | awk '{{OFS=\"\t\"}} {{print $1,$2,$3,$7,\".\",\"*\"}}' > {output}"
+
 rule annotate_peaks:
     input:
-        "{dataset}/{sample}_analysis/temp_peaks.bed"
+        "{dataset}/temp_{sample}_peaks.bed"
     output:
         "{dataset}/{sample}_analysis/peak_annotations.tsv"
     envmodules:
@@ -302,19 +306,49 @@ rule annotate_peaks:
     shell:
         "Rscript ./workflow/scripts/annotate.r {input} {output}"
 
+rule detect_doublets:
+    input:
+        counts="{dataset}/{sample}_analysis/{sample}_raw_counts.npz"
+    output:
+        "{dataset}/{sample}_analysis/doublet_analysis.tsv"
+    conda: "envs/doublets.yaml"
+    shell:
+        "python ./workflow/scripts/find_doublets.py {input.counts} {output}"
+
+rule convert_to_anndata:
+    input:
+        barcodes="{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv",
+        peaks="{dataset}/{sample}_analysis/{sample}_peak_stats.tsv",
+        counts="{dataset}/{sample}_analysis/{sample}_{treatment}_counts.npz"
+    conda:
+        "envs/report.yaml"
+    output:
+        "{dataset}/{sample}_analysis/{sample}_{treatment}.h5ad"
+    shell:
+        "python ./workflow/scripts/convert_to_h5.py --obs {input.barcodes} --var {input.peaks} --X {input.counts} -o {output}"
+
+'''
+rule cluster_bin_based:
+    input:
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+    output:
+    
+    shell:
+        "bedtools makewindows -g {config[chrom_sizes]} -w {params.bin_size} | bedtools "
+'''
+
 #___ REPORT GENERATION _____
 
 rule generate_report:
     input:
-        barcodes="{dataset}/{sample}_analysis/{sample}_barcode_stats.tsv",
-        peaks="{dataset}/{sample}_analysis/{sample}_peak_stats.tsv",
         peak_annotations="{dataset}/{sample}_analysis/peak_annotations.tsv",
-        corrected_counts="{dataset}/{sample}_analysis/{sample}_corrected_counts.npz",
-        counts="{dataset}/{sample}_analysis/{sample}_raw_counts.npz",
-        dedup_counts="{dataset}/{sample}_analysis/{sample}_dedup_counts.npz",
+        corrected_counts="{dataset}/{sample}_analysis/{sample}_corrected.h5ad",
+        counts="{dataset}/{sample}_analysis/{sample}_raw.h5ad",
+        dedup_counts="{dataset}/{sample}_analysis/{sample}_dedup.h5ad",
         dupcounts="{dataset}/{sample}_analysis/{sample}_dupgroup_counts.txt",
         sample_fragments="{dataset}/{sample}_analysis/{sample}_fragments.bed",
-        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed"
+        fragments="{dataset}/{sample}.sorted.mkdups.bias.corrected.bed",
+        doublets="{dataset}/{sample}_analysis/doublet_analysis.tsv"
     output:
         paths="{dataset}/{sample}_analysis/paths.pkl",
         diffpeaks=directory("{dataset}/{sample}_analysis/diffpeaks/"),
